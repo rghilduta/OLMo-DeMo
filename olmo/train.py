@@ -35,6 +35,7 @@ from .config import (
     CheckpointType,
     DDPGradSyncMode,
     DistributedStrategy,
+    OptimizerType,
     SchedulerUnits,
     ShardedCheckpointerType,
     SpeedMonitorConfig,
@@ -44,7 +45,7 @@ from .data import IterableDataset
 from .eval import Evaluator
 from .exceptions import OLMoConfigurationError
 from .model import OLMo
-from .optim import Optimizer, Scheduler
+from .optim import DeMo, Optimizer, Scheduler
 from .torch_util import (
     barrier,
     gc_cuda,
@@ -785,10 +786,13 @@ class Trainer:
             if (
                 self.cfg.distributed_strategy == DistributedStrategy.ddp
                 and self.cfg.ddp is not None
-                and self.cfg.ddp.grad_sync_mode == DDPGradSyncMode.batch
+                and self.cfg.ddp.grad_sync_mode != DDPGradSyncMode.micro_batch
             ):
-                if micro_batch_idx != num_micro_batches - 1:
+                if (self.cfg.ddp.grad_sync_mode == DDPGradSyncMode.batch and micro_batch_idx != num_micro_batches - 1) \
+                    or self.cfg.ddp.grad_sync_mode == DDPGradSyncMode.none:
                     grad_sync_context = self.dist_model.no_sync
+            elif self.cfg.distributed_strategy == DistributedStrategy.fsdp and self.cfg.fsdp is not None and self.cfg.fsdp.disable_grad_sync:
+                grad_sync_context = self.dist_model.no_sync
 
             # Register output hooks
             output_hooks: List[torch.utils.hooks.RemovableHandle] = []
