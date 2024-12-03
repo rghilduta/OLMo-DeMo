@@ -703,6 +703,12 @@ class DeMo(torch.optim.SGD, Optimizer):
         self.transform = TransformDCT(self.param_groups, self.compression_chunk)
         self.compress = CompressDCT()
 
+        self.data_transmit = 0
+        self.data_receive = 0
+        # Add cumulative counters
+        self.total_data_transmit = 0
+        self.total_data_receive = 0
+
     def _find_dtype(self):
         for group in self.param_groups:
             for p in group["params"]:
@@ -808,6 +814,10 @@ class DeMo(torch.optim.SGD, Optimizer):
                 # Sign-SGD
                 p.grad.sign_()
 
+        # Update cumulative totals
+        self.total_data_transmit += self.data_transmit
+        self.total_data_receive += self.data_receive
+
         # SGD step
         return super().step(closure)
 
@@ -818,6 +828,8 @@ class DeMo(torch.optim.SGD, Optimizer):
         return {
             "data_receive": torch.tensor(self.data_receive, device=get_default_device()),
             "data_transmit": torch.tensor(self.data_transmit, device=get_default_device()),
+            "total_data_receive": torch.tensor(self.total_data_receive, device=get_default_device()),
+            "total_data_transmit": torch.tensor(self.total_data_transmit, device=get_default_device()),
         }
 
 
