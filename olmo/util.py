@@ -362,29 +362,40 @@ def upload(source: PathOrStr, target: str, save_overwrite: bool = False):
         raise NotImplementedError(f"Upload not implemented for '{parsed.scheme}' scheme")
 
 
-def get_bytes_range(source: PathOrStr, bytes_start: int, num_bytes: int) -> bytes:
-    if is_url(source):
-        from urllib.parse import urlparse
+def get_bytes_range(source: PathOrStr, bytes_start: int, num_bytes: int, max_attempts: int = 3) -> bytes:
+    err: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if is_url(source):
+                from urllib.parse import urlparse
 
-        parsed = urlparse(str(source))
-        if parsed.scheme == "gs":
-            return _gcs_get_bytes_range(parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes)
-        elif parsed.scheme in ("s3", "r2", "weka"):
-            return _s3_get_bytes_range(
-                parsed.scheme, parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes
-            )
-        elif parsed.scheme in ("http", "https"):
-            return _http_get_bytes_range(
-                parsed.scheme, parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes
-            )
-        elif parsed.scheme == "file":
-            return get_bytes_range(str(source).replace("file://", "", 1), bytes_start, num_bytes)
-        else:
-            raise NotImplementedError(f"get bytes range not implemented for '{parsed.scheme}' files")
-    else:
-        with open(source, "rb") as f:
-            f.seek(bytes_start)
-            return f.read(num_bytes)
+                parsed = urlparse(str(source))
+                if parsed.scheme == "gs":
+                    return _gcs_get_bytes_range(parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes)
+                elif parsed.scheme in ("s3", "r2", "weka"):
+                    return _s3_get_bytes_range(
+                        parsed.scheme, parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes
+                    )
+                elif parsed.scheme in ("http", "https"):
+                    return _http_get_bytes_range(
+                        parsed.scheme, parsed.netloc, parsed.path.strip("/"), bytes_start, num_bytes
+                    )
+                elif parsed.scheme == "file":
+                    return get_bytes_range(str(source).replace("file://", "", 1), bytes_start, num_bytes)
+                else:
+                    raise NotImplementedError(f"get bytes range not implemented for '{parsed.scheme}' files")
+            else:
+                with open(source, "rb") as f:
+                    f.seek(bytes_start)
+                    return f.read(num_bytes)
+        except Exception as e:
+            err = e
+            if attempt < max_attempts:
+                log.warning("%s failed attempt %d with retriable error: %s", get_bytes_range.__name__, attempt, err)
+                _wait_before_retry(attempt)
+            continue
+
+    raise OLMoNetworkError("Failed to get bytes range") from err
 
 
 def find_latest_checkpoint(dir: PathOrStr) -> Optional[PathOrStr]:
