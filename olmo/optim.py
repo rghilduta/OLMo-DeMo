@@ -711,6 +711,11 @@ class DeMo(torch.optim.SGD, Optimizer):
         self.grad_entropy = 0.0
         self.spectral_entropy = 0.0
         self.spectral_flatness = 0.0
+        self.coeff_1p = 0
+        self.coeff_10p = 0
+        self.coeff_80p = 0
+        self.current_lr = 0.0
+        self.topk_energy_percentage = 0.0
 
     def _find_dtype(self):
         for group in self.param_groups:
@@ -806,9 +811,16 @@ class DeMo(torch.optim.SGD, Optimizer):
         total_spectral_entropy = 0.0
         total_spectral_flatness = 0.0
         num_grads = 0
+        total_energy_percentage = 0.0
+
+        # Initialize energy threshold counters
+        total_coeff_1p = 0
+        total_coeff_10p = 0
+        total_coeff_80p = 0
 
         for group in self.param_groups:
             lr = group["lr"]
+            self.current_lr = lr
             for p in group["params"]:
                 if not p.requires_grad:
                     continue
@@ -828,10 +840,24 @@ class DeMo(torch.optim.SGD, Optimizer):
                 # Add delta to new gradient
                 state["delta"].add_(p.grad, alpha=lr)
 
+                # Get encoded delta
+                encoded_delta = self.transform.encode(state["delta"])
+
+                energy_percentage = self.transform.compute_energy_percentage(encoded_delta, self.compression_topk)
+                total_energy_percentage += energy_percentage
+
+                # Calculate coefficients needed for different energy thresholds
+                coeff_1p = self.transform.compute_topp_energy(encoded_delta, energy_percentage=0.01)
+                coeff_10p = self.transform.compute_topp_energy(encoded_delta, energy_percentage=0.10)
+                coeff_80p = self.transform.compute_topp_energy(encoded_delta, energy_percentage=0.80)
+
+                total_coeff_1p += coeff_1p
+                total_coeff_10p += coeff_10p
+                total_coeff_80p += coeff_80p
+                num_grads += 1
+
                 # Compress delta
-                sparse_idx, sparse_val, xshape, totalk = self.compress.compress(
-                    self.transform.encode(state["delta"]), self.compression_topk
-                )
+                sparse_idx, sparse_val, xshape, totalk = self.compress.compress(encoded_delta, self.compression_topk)
 
                 # Estimate transmitted delta
                 transmit_grad = self.transform.decode(
@@ -878,6 +904,12 @@ class DeMo(torch.optim.SGD, Optimizer):
         self.grad_entropy = total_entropy / num_grads
         self.spectral_entropy = total_spectral_entropy / num_grads
         self.spectral_flatness = total_spectral_flatness / num_grads
+        self.topk_energy_percentage = total_energy_percentage / num_grads
+
+        # Average coefficient counts
+        self.coeff_1p = total_coeff_1p / num_grads
+        self.coeff_10p = total_coeff_10p / num_grads
+        self.coeff_80p = total_coeff_80p / num_grads
 
         # SGD step
         return super().step(closure)
@@ -894,6 +926,11 @@ class DeMo(torch.optim.SGD, Optimizer):
             "rxg_grad_entropy": torch.tensor(self.grad_entropy, device=get_default_device()),
             "rxg_grad_spectral_entropy": torch.tensor(self.spectral_entropy, device=get_default_device()),
             "rxg_grad_spectral_flatness": torch.tensor(self.spectral_flatness, device=get_default_device()),
+            "rxg_coeff_1p_energy": torch.tensor(self.coeff_1p, device=get_default_device()),
+            "rxg_coeff_10p_energy": torch.tensor(self.coeff_10p, device=get_default_device()),
+            "rxg_coeff_80p_energy": torch.tensor(self.coeff_80p, device=get_default_device()),
+            "rxg_learning_rate": torch.tensor(self.current_lr, device=get_default_device()),
+            "rxg_topk_energy_percentage": torch.tensor(self.topk_energy_percentage, device=get_default_device()),
         }
 
 

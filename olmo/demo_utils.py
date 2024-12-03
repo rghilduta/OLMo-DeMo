@@ -94,6 +94,75 @@ class TransformDCT:
 
         return x
 
+    @torch.no_grad()
+    def compute_topp_energy(self, x, energy_percentage: float = 0.9) -> int:
+        """
+        Compute the number of parameters needed to achieve the desired energy percentage.
+
+        Args:
+            x: Input tensor
+            energy_percentage: Desired percentage of energy to retain (between 0 and 1)
+
+        Returns:
+            The minimum number of parameters (topk) needed to achieve the energy percentage
+        """
+        xshape = x.shape
+        if len(x.shape) > 2:  # 2D weights
+            x = rearrange(x, "y x h w -> y x (h w)")
+
+        values = x.abs()
+        total_energy = torch.sum(values ** 2)
+
+        sorted_values, _ = torch.sort(values.flatten(), descending=True)
+
+        cumulative_energy = torch.cumsum(sorted_values ** 2, dim=0)
+
+        # Find minimum k that achieves the desired energy percentage
+        threshold = energy_percentage * total_energy
+        k = torch.searchsorted(cumulative_energy, threshold) + 1
+
+        totalk = x.shape[-1]
+        k = min(int(k.item()), totalk)
+
+        return k
+
+    def _clamp_topk(self, x, topk):
+        """Helper method to clamp topk to valid range."""
+        if topk > x.shape[-1]:
+            topk = x.shape[-1]
+        if topk < 1:
+            topk = 1
+        return topk
+
+    @torch.no_grad()
+    def compute_energy_percentage(self, x, topk: int) -> float:
+        """
+        Compute the percentage of total energy contained in the top-k coefficients.
+
+        Args:
+            x: Input tensor
+            topk: Number of top coefficients to consider
+
+        Returns:
+            Percentage of total energy (between 0 and 1) contained in top-k coefficients
+        """
+        xshape = x.shape
+        if len(x.shape) > 2:  # 2D weights
+            x = rearrange(x, "y x h w -> y x (h w)")
+
+        values = x.abs()
+        total_energy = torch.sum(values ** 2)
+
+        # Get top-k values
+        topk = self._clamp_topk(x, topk)
+        top_values = torch.topk(values.flatten(), k=topk, largest=True, sorted=False).values
+
+        # Calculate energy in top-k coefficients
+        topk_energy = torch.sum(top_values ** 2)
+
+        # Return percentage
+        return float((topk_energy / total_energy).item())
+
 
 class CompressDCT:
     @torch.no_grad()
