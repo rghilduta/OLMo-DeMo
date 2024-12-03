@@ -889,11 +889,11 @@ class DeMo(torch.optim.SGD, Optimizer):
         return {
             "data_receive": torch.tensor(self.data_receive, device=get_default_device()),
             "data_transmit": torch.tensor(self.data_transmit, device=get_default_device()),
-            "total_data_receive": torch.tensor(self.total_data_receive, device=get_default_device()),
-            "total_data_transmit": torch.tensor(self.total_data_transmit, device=get_default_device()),
-            "grad_entropy": torch.tensor(self.grad_entropy, device=get_default_device()),
-            "grad_spectral_entropy": torch.tensor(self.spectral_entropy, device=get_default_device()),
-            "grad_spectral_flatness": torch.tensor(self.spectral_flatness, device=get_default_device()),
+            "rxg_total_data_receive": torch.tensor(self.total_data_receive, device=get_default_device()),
+            "rxg_total_data_transmit": torch.tensor(self.total_data_transmit, device=get_default_device()),
+            "rxg_grad_entropy": torch.tensor(self.grad_entropy, device=get_default_device()),
+            "rxg_grad_spectral_entropy": torch.tensor(self.spectral_entropy, device=get_default_device()),
+            "rxg_grad_spectral_flatness": torch.tensor(self.spectral_flatness, device=get_default_device()),
         }
 
 

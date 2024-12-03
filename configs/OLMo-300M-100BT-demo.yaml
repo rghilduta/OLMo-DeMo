@@ -44,7 +44,7 @@ optimizer:
   compression_decay: 0.999
   compression_topk: 32
   compression_chunk: 64
-  metrics_log_interval: 10
+  metrics_log_interval: 1
 
 scheduler:
   name: cosine_with_warmup
