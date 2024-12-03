@@ -708,6 +708,9 @@ class DeMo(torch.optim.SGD, Optimizer):
         # Add cumulative counters
         self.total_data_transmit = 0
         self.total_data_receive = 0
+        self.grad_entropy = 0.0
+        self.spectral_entropy = 0.0
+        self.spectral_flatness = 0.0
 
     def _find_dtype(self):
         for group in self.param_groups:
@@ -751,12 +754,58 @@ class DeMo(torch.optim.SGD, Optimizer):
 
         return sparse_idx_list, sparse_val_list
 
+    def _calculate_entropy(self, tensor: torch.Tensor, num_bins: int = 100) -> float:
+        """Calculate entropy of a tensor using histogram binning."""
+        # Flatten tensor and convert to CPU for histogram calculation
+        values = tensor.detach().cpu().float().flatten()
+
+        # Calculate histogram
+        hist = torch.histogram(values, bins=num_bins)
+        counts = hist.hist
+
+        # Convert counts to probabilities and avoid log(0)
+        probs = counts / counts.sum()
+        probs = probs[probs > 0]
+
+        # Calculate entropy: -sum(p * log(p))
+        entropy = -torch.sum(probs * torch.log(probs))
+
+        return float(entropy.item())
+
+    def _calculate_spectral_metrics(self, tensor: torch.Tensor) -> Tuple[float, float]:
+        """Calculate spectral entropy and flatness using FFT."""
+        # Flatten tensor and convert to CPU for FFT
+        values = tensor.detach().cpu().float().flatten()
+
+        # Compute power spectrum
+        fft = torch.fft.fft(values)
+        power_spectrum = torch.abs(fft) ** 2
+
+        # Normalize power spectrum
+        power_spectrum = power_spectrum / power_spectrum.sum()
+
+        # Remove zeros for log calculations
+        power_spectrum = power_spectrum[power_spectrum > 0]
+
+        # Spectral Entropy: -sum(p * log(p)) where p is normalized power spectrum
+        spectral_entropy = -torch.sum(power_spectrum * torch.log(power_spectrum))
+
+        # Spectral Flatness: geometric mean / arithmetic mean of power spectrum
+        geometric_mean = torch.exp(torch.mean(torch.log(power_spectrum)))
+        arithmetic_mean = torch.mean(power_spectrum)
+        spectral_flatness = geometric_mean / arithmetic_mean
+
+        return float(spectral_entropy.item()), float(spectral_flatness.item())
 
     @torch.no_grad()
     def step(self, closure: Callable | None = None):
 
         self.data_transmit = 0
         self.data_receive = 0
+        total_entropy = 0.0
+        total_spectral_entropy = 0.0
+        total_spectral_flatness = 0.0
+        num_grads = 0
 
         for group in self.param_groups:
             lr = group["lr"]
@@ -811,12 +860,24 @@ class DeMo(torch.optim.SGD, Optimizer):
                 else:
                     p.grad.copy_(new_grad)
 
+                # Calculate metrics before sign_SGD
+                if p.grad is not None:
+                    total_entropy += self._calculate_entropy(p.grad)
+                    spec_entropy, spec_flatness = self._calculate_spectral_metrics(p.grad)
+                    total_spectral_entropy += spec_entropy
+                    total_spectral_flatness += spec_flatness
+                    num_grads += 1
+
                 # Sign-SGD
                 p.grad.sign_()
 
         # Update cumulative totals
         self.total_data_transmit += self.data_transmit
         self.total_data_receive += self.data_receive
+        num_grads = max(num_grads, 1)  # Avoid division by zero
+        self.grad_entropy = total_entropy / num_grads
+        self.spectral_entropy = total_spectral_entropy / num_grads
+        self.spectral_flatness = total_spectral_flatness / num_grads
 
         # SGD step
         return super().step(closure)
@@ -830,6 +891,9 @@ class DeMo(torch.optim.SGD, Optimizer):
             "data_transmit": torch.tensor(self.data_transmit, device=get_default_device()),
             "total_data_receive": torch.tensor(self.total_data_receive, device=get_default_device()),
             "total_data_transmit": torch.tensor(self.total_data_transmit, device=get_default_device()),
+            "grad_entropy": torch.tensor(self.grad_entropy, device=get_default_device()),
+            "grad_spectral_entropy": torch.tensor(self.spectral_entropy, device=get_default_device()),
+            "grad_spectral_flatness": torch.tensor(self.spectral_flatness, device=get_default_device()),
         }
 
 
