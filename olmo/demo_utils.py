@@ -97,32 +97,36 @@ class TransformDCT:
     @torch.no_grad()
     def compute_topp_energy(self, x, energy_percentage: float = 0.9) -> int:
         """
-        Compute the number of parameters needed to achieve the desired energy percentage.
-
-        Args:
-            x: Input tensor
-            energy_percentage: Desired percentage of energy to retain (between 0 and 1)
-
-        Returns:
-            The minimum number of parameters (topk) needed to achieve the energy percentage
+        Compute the number of parameters needed to achieve the desired energy percentage per slice.
+        For a tensor of shape [Y, X, H, W], we compute required topk for each YX slice of size (H*W),
+        then take the maximum to ensure we preserve enough energy in every slice.
         """
         xshape = x.shape
         if len(x.shape) > 2:  # 2D weights
-            x = rearrange(x, "y x h w -> y x (h w)")
+            x = rearrange(x, "y x h w -> (y x) (h w)")  # reshape to [Y*X, H*W]
+
+        # x is [num_slices, slice_size]
+        num_slices = x.shape[0]
+        slice_size = x.shape[1]
 
         values = x.abs()
-        total_energy = torch.sum(values ** 2)
+        slice_energy = torch.sum(values ** 2, dim=1)  # [num_slices]
 
-        sorted_values, _ = torch.sort(values.flatten(), descending=True)
+        sorted_values, _ = torch.sort(values, dim=1, descending=True)  # [num_slices, slice_size]
 
-        cumulative_energy = torch.cumsum(sorted_values ** 2, dim=0)
+        cumulative_energy = torch.cumsum(sorted_values ** 2, dim=1)  # [num_slices, slice_size]
 
-        # Find minimum k that achieves the desired energy percentage
-        threshold = energy_percentage * total_energy
-        k = torch.searchsorted(cumulative_energy, threshold) + 1
+        thresholds = energy_percentage * slice_energy.unsqueeze(1)  # [num_slices, 1]
 
-        totalk = x.shape[-1]
-        k = min(int(k.item()), totalk)
+        k_per_slice = torch.sum(cumulative_energy < thresholds, dim=1) + 1  # [num_slices]
+
+        k = int(k_per_slice.max().item())
+        k = min(k, slice_size)  # Clamp to valid range
+
+        print(f"Required topk across {num_slices} slices of size {slice_size}:")
+        print(f"Max k (selected): {k}")
+        print(f"Min k required: {int(k_per_slice.min().item())}")
+        print(f"Mean k required: {float(k_per_slice.float().mean().item()):.1f}")
 
         return k
 
@@ -137,31 +141,34 @@ class TransformDCT:
     @torch.no_grad()
     def compute_energy_percentage(self, x, topk: int) -> float:
         """
-        Compute the percentage of total energy contained in the top-k coefficients.
-
-        Args:
-            x: Input tensor
-            topk: Number of top coefficients to consider
-
-        Returns:
-            Percentage of total energy (between 0 and 1) contained in top-k coefficients
+        Compute the average percentage of energy contained in top-k coefficients per slice.
+        For a tensor of shape [Y, X, H, W], we compute energy percentage of topk values
+        in each YX slice of size (H*W), then average across all slices.
         """
         xshape = x.shape
         if len(x.shape) > 2:  # 2D weights
-            x = rearrange(x, "y x h w -> y x (h w)")
+            x = rearrange(x, "y x h w -> (y x) (h w)")  # reshape to [Y*X, H*W]
+
+        # x is [num_slices, slice_size]
+        num_slices = x.shape[0]
+        slice_size = x.shape[1]
 
         values = x.abs()
-        total_energy = torch.sum(values ** 2)
+        # Calculate energy per slice
+        slice_energy = torch.sum(values ** 2, dim=1)  # [num_slices]
 
-        # Get top-k values
         topk = self._clamp_topk(x, topk)
-        top_values = torch.topk(values.flatten(), k=topk, largest=True, sorted=False).values
+        top_values, _ = torch.topk(values, k=topk, dim=1, largest=True)  # [num_slices, topk]
+        topk_energy = torch.sum(top_values ** 2, dim=1)  # [num_slices]
 
-        # Calculate energy in top-k coefficients
-        topk_energy = torch.sum(top_values ** 2)
+        slice_percentages = topk_energy / slice_energy
+        avg_percentage = float(slice_percentages.mean().item())*100
 
-        # Return percentage
-        return float((topk_energy / total_energy).item())
+        print(f"Average energy percentage across {num_slices} slices of size {slice_size}: {avg_percentage:.4f}")
+        print(f"Min slice energy %: {float(slice_percentages.min().item()):.4f}")
+        print(f"Max slice energy %: {float(slice_percentages.max().item()):.4f}")
+
+        return avg_percentage
 
 
 class CompressDCT:

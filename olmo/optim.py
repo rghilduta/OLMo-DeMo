@@ -842,6 +842,7 @@ class DeMo(torch.optim.SGD, Optimizer):
 
                 # Get encoded delta
                 encoded_delta = self.transform.encode(state["delta"])
+                print(f"Encoded delta shape: {encoded_delta.shape} with numel: {encoded_delta.numel()}")
 
                 energy_percentage = self.transform.compute_energy_percentage(encoded_delta, self.compression_topk)
                 total_energy_percentage += energy_percentage
